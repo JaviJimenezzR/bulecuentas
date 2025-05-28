@@ -1,10 +1,9 @@
-import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const MyApp());
@@ -15,125 +14,118 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
-      home: SumadorDeCuentas(),
+      home: HomePage(),
     );
   }
 }
 
-class SumadorDeCuentas extends StatefulWidget {
-  const SumadorDeCuentas({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
   @override
-  State<SumadorDeCuentas> createState() => _SumadorDeCuentasState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _SumadorDeCuentasState extends State<SumadorDeCuentas> {
-  final ImagePicker _picker = ImagePicker();
-  double totalSum = 0;
-  bool loading = false;
+class _HomePageState extends State<HomePage> {
+  List<Uint8List> _images = [];
+  String _status = 'Selecciona imágenes para sumar los números detectados';
+  double _total = 0;
 
-  Future<void> pickImagesAndSum() async {
-    setState(() {
-      loading = true;
-      totalSum = 0;
-    });
+  Future<void> _pickImages() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+      allowMultiple: true,
+    );
 
-    double sum = 0;
+    if (result != null) {
+      final selectedImages = result.files
+          .where((f) => f.bytes != null)
+          .map((f) => f.bytes!)
+          .toList();
 
-    if (kIsWeb) {
-      // En web solo una imagen (multi no soportado)
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-      if (image == null) {
-        setState(() {
-          loading = false;
-        });
-        return;
-      }
-      sum = await _ocrSpaceApiSum(await image.readAsBytes());
+      setState(() {
+        _images = selectedImages;
+        _status = 'Procesando imágenes...';
+        _total = 0;
+      });
+
+      await _processImages(_images);
     } else {
-      // En móvil multi imagen con ML Kit
-      final List<XFile>? images = await _picker.pickMultiImage();
-      if (images == null || images.isEmpty) {
-        setState(() {
-          loading = false;
-        });
-        return;
-      }
+      setState(() {
+        _status = '❌ No se seleccionaron imágenes.';
+      });
+    }
+  }
 
-      final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  Future<void> _processImages(List<Uint8List> images) async {
+    double sum = 0;
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-      for (var image in images) {
-        final inputImage = InputImage.fromFilePath(image.path);
-        final recognizedText = await textRecognizer.processImage(inputImage);
+    for (final bytes in images) {
+      final filePath = await _bytesToFile(bytes);
+      final inputImage = InputImage.fromFilePath(filePath);
 
-        final regex = RegExp(r'(\d+[\.,]?\d*)\s*€');
-        final matches = regex.allMatches(recognizedText.text);
+      final visionText = await textRecognizer.processImage(inputImage);
+      final text = visionText.text;
 
-        for (var match in matches) {
-          String numberStr = match.group(1)!.replaceAll(',', '.');
-          sum += double.tryParse(numberStr) ?? 0;
-        }
-      }
-      await textRecognizer.close();
+      final numbers = RegExp(r'\d+([.,]\d+)?')
+          .allMatches(text)
+          .map((m) => m.group(0)!.replaceAll(',', '.'))
+          .map((n) => double.tryParse(n))
+          .where((n) => n != null)
+          .cast<double>();
+
+      sum += numbers.fold(0, (prev, el) => prev + el);
     }
 
+    textRecognizer.close();
+
     setState(() {
-      totalSum = sum;
-      loading = false;
+      _status = '✅ Números detectados y sumados.';
+      _total = sum;
     });
   }
 
-  Future<double> _ocrSpaceApiSum(Uint8List imageBytes) async {
-    const apiKey = 'helloworld'; // API KEY gratuita para pruebas
-    final uri = Uri.parse('https://api.ocr.space/parse/image');
-
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['apikey'] = apiKey;
-    request.fields['language'] = 'eng';
-    request.fields['isOverlayRequired'] = 'false';
-    request.files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: 'image.jpg'));
-
-    final response = await request.send();
-    final respStr = await response.stream.bytesToString();
-
-    final Map<String, dynamic> jsonResponse = json.decode(respStr);
-    if (jsonResponse['IsErroredOnProcessing'] == true) {
-      return 0;
-    }
-
-    final parsedText = jsonResponse['ParsedResults'][0]['ParsedText'] as String;
-
-    final regex = RegExp(r'(\d+[\.,]?\d*)\s*€');
-    final matches = regex.allMatches(parsedText);
-
-    double sum = 0;
-    for (var match in matches) {
-      String numberStr = match.group(1)!.replaceAll(',', '.');
-      sum += double.tryParse(numberStr) ?? 0;
-    }
-    return sum;
+  Future<String> _bytesToFile(Uint8List bytes) async {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg');
+    await file.writeAsBytes(bytes);
+    return file.path;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sumador de cuentas')),
+      appBar: AppBar(title: const Text('Sumar totales de imágenes')),
       body: Center(
-        child: loading
-            ? const CircularProgressIndicator()
-            : totalSum > 0
-            ? Text(
-          'Total: €${totalSum.toStringAsFixed(2)}',
-          style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold),
-        )
-            : const Text(
-          'Selecciona imágenes para sumar las cuentas',
-          style: TextStyle(fontSize: 20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: _pickImages,
+              child: const Text('Seleccionar imágenes'),
+            ),
+            const SizedBox(height: 20),
+            Text(_status),
+            if (_images.isNotEmpty)
+              SizedBox(
+                height: 150,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _images.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) =>
+                      Image.memory(_images[index], width: 100),
+                ),
+              ),
+            const SizedBox(height: 20),
+            if (_total > 0)
+              Text(
+                '🧮 Total detectado: $_total',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+          ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: pickImagesAndSum,
-        tooltip: 'Seleccionar imágenes',
-        child: const Icon(Icons.photo_library),
       ),
     );
   }
