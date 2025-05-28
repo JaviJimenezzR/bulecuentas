@@ -48,13 +48,14 @@ class _HomePageState extends State<HomePage> {
         if (file.bytes != null) {
           _images.add(file.bytes!);
 
+          // Aquí ponemos metadata mínima para no fallar:
           final inputImage = InputImage.fromBytes(
             bytes: file.bytes!,
             metadata: const InputImageMetadata(
-              size: Size(100, 100),
+              size: Size(100, 100), // No ideal, pero evita error
               rotation: InputImageRotation.rotation0deg,
               format: InputImageFormat.bgra8888,
-              bytesPerRow: 400,
+              bytesPerRow: 100 * 4, // 4 bytes por pixel (RGBA)
             ),
           );
 
@@ -77,12 +78,16 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _extractAndSumPrices(String text) {
-    final regExp = RegExp(r'(\d+[.,]?\d*)\s?€');
+    // Expresión que busca números con o sin coma/punto y el símbolo euro delante o detrás
+    final regExp = RegExp(r'€?\s?(\d+[.,]?\d*)\s?€');
+
     final matches = regExp.allMatches(text);
 
     for (final match in matches) {
       String matchStr = match.group(1) ?? '';
-      matchStr = matchStr.replaceAll(',', '.');
+      // Limpia espacios y cambia coma a punto
+      matchStr = matchStr.trim().replaceAll(',', '.');
+
       final value = double.tryParse(matchStr);
       if (value != null) {
         _total += value;
