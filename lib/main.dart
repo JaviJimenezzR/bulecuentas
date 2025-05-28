@@ -48,11 +48,25 @@ class _HomePageState extends State<HomePage> {
         if (file.bytes != null) {
           _images.add(file.bytes!);
 
-          final inputImage = InputImage.fromFilePath(file.path!);
+          // Estimación mínima para metadatos (necesarios para Web)
+          final inputImage = InputImage.fromBytes(
+            bytes: file.bytes!,
+            metadata: InputImageMetadata(
+              size: const Size(100, 100),
+              rotation: InputImageRotation.rotation0deg,
+              format: InputImageFormat.nv21,
+              bytesPerRow: 100,
+            ),
+          );
 
-          final RecognizedText recognizedText = await recognizer.processImage(inputImage);
+          try {
+            final RecognizedText recognizedText =
+            await recognizer.processImage(inputImage);
 
-          _extractAndSumPrices(recognizedText.text);
+            _extractAndSumPrices(recognizedText.text);
+          } catch (e) {
+            print('Error al procesar la imagen: $e');
+          }
         }
       }
 
@@ -69,7 +83,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _extractAndSumPrices(String text) {
-    // Busca cualquier número con € delante o detrás
+    // Coincidencias tipo €2,50  o 2.50 €
     final regExp = RegExp(r'(?:€\s?|(?<=\s))(\d+[.,]?\d*)(?:\s?€)?');
 
     final matches = regExp.allMatches(text);
