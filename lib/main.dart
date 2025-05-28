@@ -1,8 +1,6 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 void main() {
@@ -26,9 +24,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  String _status = 'Selecciona imágenes con números (€)';
   List<Uint8List> _images = [];
-  String _status = 'Selecciona imágenes para sumar los números detectados';
-  double _total = 0;
+  double _total = 0.0;
 
   Future<void> _pickImages() async {
     final result = await FilePicker.platform.pickFiles(
@@ -37,94 +35,87 @@ class _HomePageState extends State<HomePage> {
       allowMultiple: true,
     );
 
-    if (result != null) {
-      final selectedImages = result.files
-          .where((f) => f.bytes != null)
-          .map((f) => f.bytes!)
-          .toList();
-
+    if (result != null && result.files.isNotEmpty) {
+      _images.clear();
+      _total = 0.0;
       setState(() {
-        _images = selectedImages;
-        _status = 'Procesando imágenes...';
-        _total = 0;
+        _status = 'Procesando ${result.files.length} imagen(es)...';
       });
 
-      await _processImages(_images);
+      final recognizer = TextRecognizer();
+
+      for (final file in result.files) {
+        if (file.bytes != null) {
+          _images.add(file.bytes!);
+
+          final inputImage = InputImage.fromBytes(
+            bytes: file.bytes!,
+            metadata: const InputImageMetadata(
+              size: Size(100, 100),
+              rotation: InputImageRotation.rotation0deg,
+              format: InputImageFormat.bgra8888,
+              bytesPerRow: 400,
+            ),
+          );
+
+          final RecognizedText recognizedText = await recognizer.processImage(inputImage);
+
+          _extractAndSumPrices(recognizedText.text);
+        }
+      }
+
+      recognizer.close();
+
+      setState(() {
+        _status = '✅ Suma total: ${_total.toStringAsFixed(2)} €';
+      });
     } else {
       setState(() {
-        _status = '❌ No se seleccionaron imágenes.';
+        _status = '❌ No se seleccionó ninguna imagen.';
       });
     }
   }
 
-  Future<void> _processImages(List<Uint8List> images) async {
-    double sum = 0;
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  void _extractAndSumPrices(String text) {
+    final regExp = RegExp(r'(\d+[.,]?\d*)\s?€');
+    final matches = regExp.allMatches(text);
 
-    for (final bytes in images) {
-      final filePath = await _bytesToFile(bytes);
-      final inputImage = InputImage.fromFilePath(filePath);
-
-      final visionText = await textRecognizer.processImage(inputImage);
-      final text = visionText.text;
-
-      final numbers = RegExp(r'\d+([.,]\d+)?')
-          .allMatches(text)
-          .map((m) => m.group(0)!.replaceAll(',', '.'))
-          .map((n) => double.tryParse(n))
-          .where((n) => n != null)
-          .cast<double>();
-
-      sum += numbers.fold(0, (prev, el) => prev + el);
+    for (final match in matches) {
+      String matchStr = match.group(1) ?? '';
+      matchStr = matchStr.replaceAll(',', '.');
+      final value = double.tryParse(matchStr);
+      if (value != null) {
+        _total += value;
+      }
     }
-
-    textRecognizer.close();
-
-    setState(() {
-      _status = '✅ Números detectados y sumados.';
-      _total = sum;
-    });
-  }
-
-  Future<String> _bytesToFile(Uint8List bytes) async {
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg');
-    await file.writeAsBytes(bytes);
-    return file.path;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sumar totales de imágenes')),
+      appBar: AppBar(title: const Text('Suma de cantidades €')),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: _pickImages,
-              child: const Text('Seleccionar imágenes'),
-            ),
-            const SizedBox(height: 20),
-            Text(_status),
-            if (_images.isNotEmpty)
-              SizedBox(
-                height: 150,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _images.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
-                  itemBuilder: (context, index) =>
-                      Image.memory(_images[index], width: 100),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                onPressed: _pickImages,
+                child: const Text('Seleccionar imágenes'),
+              ),
+              const SizedBox(height: 20),
+              if (_images.isNotEmpty)
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _images
+                      .map((img) => Image.memory(img, width: 100, height: 100, fit: BoxFit.cover))
+                      .toList(),
                 ),
-              ),
-            const SizedBox(height: 20),
-            if (_total > 0)
-              Text(
-                '🧮 Total detectado: $_total',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-          ],
+              const SizedBox(height: 20),
+              Text(_status, style: const TextStyle(fontSize: 18)),
+            ],
+          ),
         ),
       ),
     );
