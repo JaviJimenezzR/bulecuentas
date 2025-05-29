@@ -1,7 +1,8 @@
-import 'dart:typed_data';
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:intl/intl.dart';
 
 void main() {
   runApp(const MyApp());
@@ -12,131 +13,88 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      home: HomePage(),
+    return MaterialApp(
+      title: 'Bulecuentas',
+      theme: ThemeData.dark(),
+      home: const HomeScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomePageState extends State<HomePage> {
-  String _status = 'Selecciona imágenes con cantidades en €';
-  String _debugText = '';
-  List<Uint8List> _images = [];
-  double _total = 0.0;
+class _HomeScreenState extends State<HomeScreen> {
+  final ImagePicker _picker = ImagePicker();
+  String _result = '';
+  bool _isProcessing = false;
 
-  Future<void> _pickImages() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-      allowMultiple: true,
-    );
-
-    if (result != null && result.files.isNotEmpty) {
-      _images.clear();
-      _total = 0.0;
-      _debugText = '';
-
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
       setState(() {
-        _status = 'Procesando ${result.files.length} imagen(es)...';
+        _isProcessing = true;
+        _result = 'Procesando imagen...';
       });
-
-      final recognizer = TextRecognizer();
-
-      for (final file in result.files) {
-        if (file.bytes != null) {
-          _images.add(file.bytes!);
-
-          final inputImage = InputImage.fromFilePath(file.path!);
-
-          final RecognizedText recognizedText =
-          await recognizer.processImage(inputImage);
-
-          final detectedText = recognizedText.text;
-          print("Texto detectado:\n$detectedText");
-
-          _debugText += '\n\n--- Imagen ---\n$detectedText';
-
-          _extractAndSumPrices(detectedText);
-        }
-      }
-
-      recognizer.close();
-
-      setState(() {
-        _status = '✅ Suma total: ${_total.toStringAsFixed(2)} €';
-      });
-    } else {
-      setState(() {
-        _status = '❌ No se seleccionó ninguna imagen.';
-      });
+      await _processImage(File(pickedFile.path));
     }
   }
 
-  void _extractAndSumPrices(String text) {
-    // Regex para encontrar precios como "23,45€", "€ 23.45", "23.45 €", etc.
-    final regExp = RegExp(r'€\s?(\d+[.,]?\d*)|(\d+[.,]?\d*)\s?€');
+  Future<void> _processImage(File imageFile) async {
+    final inputImage = InputImage.fromFile(imageFile);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
 
-    final matches = regExp.allMatches(text);
+    final String rawText = recognizedText.text;
+    final List<RegExpMatch> matches =
+    RegExp(r'\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\s?[€€]', caseSensitive: false)
+        .allMatches(rawText)
+        .toList();
 
-    for (final match in matches) {
-      String? matchStr = match.group(1) ?? match.group(2);
+    double total = 0.0;
+    List<String> amountsFound = [];
 
-      if (matchStr != null) {
-        matchStr = matchStr.replaceAll(',', '.').trim();
-        final value = double.tryParse(matchStr);
-        if (value != null) {
-          _total += value;
-        }
+    for (var match in matches) {
+      String matchText = match.group(0)!.replaceAll('€', '').replaceAll(' ', '');
+      matchText = matchText.replaceAll('.', '').replaceAll(',', '.'); // Formato europeo
+      double? value = double.tryParse(matchText);
+      if (value != null) {
+        total += value;
+        amountsFound.add(value.toStringAsFixed(2));
       }
     }
+
+    final formatCurrency = NumberFormat.currency(locale: 'es_ES', symbol: '€');
+
+    setState(() {
+      _isProcessing = false;
+      _result = 'Total: ${formatCurrency.format(total)}\n';
+      _result += 'Importes detectados (${amountsFound.length}):\n';
+      _result += amountsFound.join(', ');
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sumador de cuentas €')),
+      appBar: AppBar(title: const Text('Bulecuentas')),
       body: Center(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                ElevatedButton(
-                  onPressed: _pickImages,
-                  child: const Text('Seleccionar imágenes'),
-                ),
-                const SizedBox(height: 20),
-                if (_images.isNotEmpty)
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: _images
-                        .map((img) => Image.memory(img,
-                        width: 100, height: 100, fit: BoxFit.cover))
-                        .toList(),
-                  ),
-                const SizedBox(height: 20),
-                Text(_status,
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 20),
-                if (_debugText.isNotEmpty)
-                  Text(
-                    _debugText,
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
-                  ),
-              ],
-            ),
-          ),
+        child: _isProcessing
+            ? const CircularProgressIndicator()
+            : Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(_result, style: const TextStyle(fontSize: 18)),
         ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _pickImage,
+        tooltip: 'Seleccionar imagen',
+        child: const Icon(Icons.add_photo_alternate),
       ),
     );
   }
